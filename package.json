@@ -1,0 +1,21 @@
+{
+  "name": "invoice-review-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "pdfjs-dist": "^6.4.299",
+    "react": "latest",
+    "react-dom": "latest",
+    "tesseract.js": "^7.0.0",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
