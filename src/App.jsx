@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import Review from "./Review.jsx";
 
 const STORAGE_KEY = "ledgerline-invoices-v1";
+const DB_NAME = "ledgerline-documents";
+const STORE_NAME = "documents";
 
 const initialInvoices = [
   {
@@ -12,7 +14,6 @@ const initialInvoices = [
     date: "2026-10-20",
     amount: "24500",
     status: "Pending",
-    file: null,
     fileName: "",
   },
   {
@@ -22,7 +23,6 @@ const initialInvoices = [
     date: "2026-10-19",
     amount: "18200",
     status: "Approved",
-    file: null,
     fileName: "",
   },
   {
@@ -32,7 +32,6 @@ const initialInvoices = [
     date: "2026-10-18",
     amount: "32750",
     status: "Needs review",
-    file: null,
     fileName: "",
   },
 ];
@@ -48,36 +47,126 @@ function loadInvoices() {
         return parsed.map((invoice, index) => ({
           ...invoice,
           uid: invoice.uid || `restored-${invoice.id}-${index}`,
-          file: null,
           fileName: invoice.fileName || "",
         }));
       }
     }
   } catch (error) {
-    console.error("Could not load saved invoices:", error);
+    console.error("Could not load invoices:", error);
   }
 
   return initialInvoices;
+}
+
+function openDocumentDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveDocument(uid, file) {
+  const db = await openDocumentDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+
+    transaction.objectStore(STORE_NAME).put(
+      {
+        blob: file,
+        name: file.name,
+        type: file.type,
+      },
+      uid
+    );
+
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+}
+
+async function getDocument(uid) {
+  const db = await openDocumentDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readonly");
+    const request = transaction.objectStore(STORE_NAME).get(uid);
+
+    request.onsuccess = () => {
+      const saved = request.result;
+      db.close();
+
+      if (!saved?.blob) {
+        resolve(null);
+        return;
+      }
+
+      resolve(
+        new File([saved.blob], saved.name || "invoice", {
+          type: saved.type || saved.blob.type || "",
+        })
+      );
+    };
+
+    request.onerror = () => {
+      db.close();
+      reject(request.error);
+    };
+  });
+}
+
+async function deleteDocument(uid) {
+  const db = await openDocumentDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    transaction.objectStore(STORE_NAME).delete(uid);
+
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
 }
 
 export default function App() {
   const [page, setPage] = useState("Dashboard");
   const [invoices, setInvoices] = useState(loadInvoices);
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [storageError, setStorageError] = useState("");
 
-  // Save invoice metadata whenever it changes.
-  // File objects are intentionally excluded because localStorage
-  // cannot persist uploaded File objects.
   useEffect(() => {
     try {
-      const serializableInvoices = invoices.map(
-        ({ file, ...invoice }) => invoice
-      );
-
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(serializableInvoices)
-      );
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(invoices));
     } catch (error) {
       console.error("Could not save invoices:", error);
     }
@@ -91,18 +180,33 @@ export default function App() {
     setInvoices((current) =>
       current.map((invoice) =>
         invoice.uid === updated.uid
-          ? { ...updated, file: invoice.file }
+          ? { ...invoice, ...updated }
           : invoice
       )
     );
   }
 
-  function openReview(uid) {
+  async function openReview(uid) {
     setSelectedId(uid);
+    setSelectedFile(null);
+    setStorageError("");
     setPage("Review");
+    setFileLoading(true);
+
+    try {
+      const file = await getDocument(uid);
+      setSelectedFile(file);
+    } catch (error) {
+      console.error("Could not restore document:", error);
+      setStorageError(
+        "Could not restore the saved document. Please upload it again."
+      );
+    } finally {
+      setFileLoading(false);
+    }
   }
 
-  function handleUpload(event) {
+  async function handleUpload(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
 
@@ -134,13 +238,58 @@ export default function App() {
       date: "",
       amount: "",
       status: "Pending",
-      file,
       fileName: file.name,
     };
 
+    try {
+      await saveDocument(uid, file);
+    } catch (error) {
+      console.error("Could not save document:", error);
+      alert("Could not save the file in browser storage. Please try again.");
+      return;
+    }
+
     setInvoices((current) => [newInvoice, ...current]);
     setSelectedId(uid);
+    setSelectedFile(file);
+    setStorageError("");
     setPage("Review");
+  }
+
+  async function handleFileChange(file) {
+    if (!selectedId) return;
+
+    try {
+      if (file) {
+        await saveDocument(selectedId, file);
+      } else {
+        await deleteDocument(selectedId);
+      }
+
+      setSelectedFile(file);
+      setStorageError("");
+
+      setInvoices((current) =>
+        current.map((invoice) =>
+          invoice.uid === selectedId
+            ? {
+                ...invoice,
+                fileName: file?.name || "",
+              }
+            : invoice
+        )
+      );
+    } catch (error) {
+      console.error("Could not update saved document:", error);
+      setStorageError("Could not save the document. Please try again.");
+    }
+  }
+
+  function handleBack() {
+    setPage("Dashboard");
+    setSelectedId(null);
+    setSelectedFile(null);
+    setStorageError("");
   }
 
   if (page === "Review" && selectedInvoice) {
@@ -149,8 +298,11 @@ export default function App() {
         key={selectedInvoice.uid}
         invoice={selectedInvoice}
         onUpdate={updateInvoice}
-        onBack={() => setPage("Dashboard")}
-        initialFile={selectedInvoice.file}
+        onBack={handleBack}
+        initialFile={selectedFile}
+        fileLoading={fileLoading}
+        storageError={storageError}
+        onFileChange={handleFileChange}
       />
     );
   }
@@ -268,7 +420,7 @@ export default function App() {
                     {page === "Dashboard" ? "Recent invoices" : "Invoice queue"}
                   </h2>
                   <p>
-                    Select Review to open that invoice's own details and document.
+                    Select Review to open an invoice and its saved document.
                   </p>
                 </div>
               </div>
@@ -336,8 +488,8 @@ export default function App() {
               </div>
 
               <p className="demo-note">
-                Invoice details and statuses are saved in this browser.
-                Uploaded documents need to be selected again after a refresh.
+                Invoice details are saved in this browser. Uploaded documents
+                are stored separately in IndexedDB.
               </p>
             </section>
           </>
