@@ -153,6 +153,11 @@ async function deleteDocument(uid) {
       db.close();
       reject(transaction.error);
     };
+
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error);
+    };
   });
 }
 
@@ -163,6 +168,7 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [storageError, setStorageError] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     try {
@@ -203,6 +209,39 @@ export default function App() {
       );
     } finally {
       setFileLoading(false);
+    }
+  }
+
+  async function handleDeleteInvoice(invoice) {
+    const confirmed = window.confirm(
+      `Delete invoice "${invoice.id}"${invoice.vendor ? ` (${invoice.vendor})` : ""}?\n\nThis will permanently remove the invoice and its saved document from this browser.`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(invoice.uid);
+
+    try {
+      await deleteDocument(invoice.uid);
+
+      setInvoices((current) =>
+        current.filter((item) => item.uid !== invoice.uid)
+      );
+
+      if (selectedId === invoice.uid) {
+        setSelectedId(null);
+        setSelectedFile(null);
+        setStorageError("");
+        setFileLoading(false);
+        setPage("Dashboard");
+      }
+    } catch (error) {
+      console.error("Could not delete invoice document:", error);
+      alert(
+        "Could not delete the saved document. The invoice was not removed. Please try again."
+      );
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -439,50 +478,72 @@ export default function App() {
                   </thead>
 
                   <tbody>
-                    {invoices.map((invoice) => (
-                      <tr key={invoice.uid}>
-                        <td>{invoice.id}</td>
-                        <td>
-                          {invoice.vendor ||
-                            invoice.fileName ||
-                            "New uploaded invoice"}
-                        </td>
-                        <td>
-                          {invoice.date
-                            ? new Date(`${invoice.date}T00:00:00`).toLocaleDateString(
-                                "en-GB",
-                                {
-                                  day: "2-digit",
-                                  month: "short",
-                                  year: "numeric",
-                                }
-                              )
-                            : "Not detected"}
-                        </td>
-                        <td>
-                          {invoice.amount
-                            ? `₹${Number(invoice.amount).toLocaleString("en-IN")}`
-                            : "Not detected"}
-                        </td>
-                        <td>
-                          <span
-                            className={`status ${invoice.status
-                              .toLowerCase()
-                              .replaceAll(" ", "-")}`}
-                          >
-                            {invoice.status}
-                          </span>
-                        </td>
-                        <td>
-                          <button
-                            className="text-button"
-                            onClick={() => openReview(invoice.uid)}
-                          >
-                            Review →
-                          </button>
+                    {invoices.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" className="empty-invoices">
+                          No invoices yet. Upload an invoice to get started.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      invoices.map((invoice) => (
+                        <tr key={invoice.uid}>
+                          <td>{invoice.id}</td>
+                          <td>
+                            {invoice.vendor ||
+                              invoice.fileName ||
+                              "New uploaded invoice"}
+                          </td>
+                          <td>
+                            {invoice.date
+                              ? new Date(`${invoice.date}T00:00:00`).toLocaleDateString(
+                                  "en-GB",
+                                  {
+                                    day: "2-digit",
+                                    month: "short",
+                                    year: "numeric",
+                                  }
+                                )
+                              : "Not detected"}
+                          </td>
+                          <td>
+                            {invoice.amount
+                              ? `₹${Number(invoice.amount).toLocaleString("en-IN")}`
+                              : "Not detected"}
+                          </td>
+                          <td>
+                            <span
+                              className={`status ${invoice.status
+                                .toLowerCase()
+                                .replaceAll(" ", "-")}`}
+                            >
+                              {invoice.status}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="invoice-actions">
+                              <button
+                                className="text-button"
+                                onClick={() => openReview(invoice.uid)}
+                              >
+                                Review →
+                              </button>
+
+                              <button
+                                className="delete-button"
+                                onClick={() => handleDeleteInvoice(invoice)}
+                                disabled={deletingId === invoice.uid}
+                                title={`Delete ${invoice.id}`}
+                                aria-label={`Delete invoice ${invoice.id}`}
+                              >
+                                {deletingId === invoice.uid
+                                  ? "Deleting..."
+                                  : "🗑 Delete"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
